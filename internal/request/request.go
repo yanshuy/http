@@ -85,6 +85,8 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 		}
 	}
 
+	// TODO: in case when the recieved chunk makes parsed Body size == content length
+	// parsing state is set to done but there can be more data coming how do i handle this?
 	return rp.Request, nil
 }
 
