@@ -1,4 +1,4 @@
-module github.com/yanshuy/http-server
+module github.com/yanshuy/http
 
 go 1.23.4
 

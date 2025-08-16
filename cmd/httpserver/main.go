@@ -8,9 +8,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/yanshuy/http-server/internal/request"
-	"github.com/yanshuy/http-server/internal/response"
-	"github.com/yanshuy/http-server/internal/server"
+	"github.com/yanshuy/http/internal/request"
+	"github.com/yanshuy/http/internal/response"
+	"github.com/yanshuy/http/internal/server"
 )
 
 func HandleRequest(w *response.Writer, r *request.Request) error {

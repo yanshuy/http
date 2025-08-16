@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yanshuy/http-server/internal/headers"
+	"github.com/yanshuy/http/internal/headers"
 )
 
 type chunkReader struct {

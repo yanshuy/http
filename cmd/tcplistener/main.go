@@ -5,7 +5,7 @@ import (
 	"log"
 	"net"
 
-	"github.com/yanshuy/http-server/internal/request"
+	"github.com/yanshuy/http/internal/request"
 )
 
 func main() {

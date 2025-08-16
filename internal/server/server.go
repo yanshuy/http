@@ -5,8 +5,8 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/yanshuy/http-server/internal/request"
-	"github.com/yanshuy/http-server/internal/response"
+	"github.com/yanshuy/http/internal/request"
+	"github.com/yanshuy/http/internal/response"
 )
 
 type serverState int
