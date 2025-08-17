@@ -184,10 +184,12 @@ func parseRequestLine(line []byte) (*RequestLine, error) {
 	}, nil
 }
 
-var ErrMalformedRequestLine = errors.New("malformed request line")
-var ErrUnsupportedVersion = errors.New("version not supported")
-var ErrInvalidContentLength = errors.New("invalid content length")
-var ErrBodyGreaterThanContentLength = errors.New("body greater than the content length")
+var (
+	ErrMalformedRequestLine         = errors.New("malformed request line")
+	ErrUnsupportedVersion           = errors.New("version not supported")
+	ErrInvalidContentLength         = errors.New("invalid content length")
+	ErrBodyGreaterThanContentLength = errors.New("body greater than the content length")
+)
 
 func IsVersionSupported(httpVersion string) bool {
 	return httpVersion == "1.1"

@@ -43,6 +43,7 @@ func (h Headers) Del(key string) {
 	delete(h, lower)
 }
 
+// TODO: use this when parsing
 func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 	read := 0
 	for {

@@ -102,7 +102,7 @@ func Test_FinishShortWrite(t *testing.T) {
 	var buf bytes.Buffer
 	w := NewResponseWriter(&buf)
 	w.Headers().Set(ContentLength, "5")
-	_, err := w.Write([]byte("hi")) // only 2 of 5
+	_, err := w.Write([]byte("hi"))
 	require.NoError(t, err)
 	err = w.Finish()
 	require.Error(t, err)
@@ -110,15 +110,14 @@ func Test_FinishShortWrite(t *testing.T) {
 
 	p := parseHTTP(buf.Bytes())
 	assert.Equal(t, "5", p.headers["content-length"])
-	// body should be empty since content-length not satisfied (we buffer until full)
-	assert.Equal(t, "", p.body)
+	assert.Equal(t, "hi", p.body)
 }
 
 func Test_WriteMoreThanContentLength(t *testing.T) {
 	var buf bytes.Buffer
 	w := NewResponseWriter(&buf)
 	w.Headers().Set(ContentLength, "3")
-	_, err := w.Write([]byte("abcd")) // exceeds
+	_, err := w.Write([]byte("abcd"))
 	require.Error(t, err)
 	assert.Equal(t, ErrWriteMoreThanContentLength, err)
 }

@@ -1,25 +1,19 @@
 package server
 
 import (
+	"errors"
 	"log"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/yanshuy/http/internal/request"
 	"github.com/yanshuy/http/internal/response"
 )
 
-type serverState int
-
-const (
-	listening serverState = iota
-	closed
-)
-
 type Server struct {
 	listener net.Listener
 	Handler
-	state serverState
 }
 
 type Handler func(w *response.Writer, r *request.Request) error
@@ -33,7 +27,6 @@ func Serve(addr string, handler Handler) (*Server, error) {
 	server := &Server{
 		listener: ln,
 		Handler:  handler,
-		state:    listening,
 	}
 
 	go server.listen()
@@ -44,11 +37,12 @@ func Serve(addr string, handler Handler) (*Server, error) {
 func (s *Server) listen() {
 	for {
 		conn, err := s.listener.Accept()
-		if s.state == closed {
-			return
-		}
 		if err != nil {
-			log.Println("error accepting connection", err)
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			log.Println("accept error:", err)
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		log.Println("connection accepted from", conn.RemoteAddr())
@@ -56,33 +50,36 @@ func (s *Server) listen() {
 	}
 }
 
-// Calling Close transitions the server into a closed state
 func (s *Server) Close() error {
-	s.state = closed
-	err := s.listener.Close()
-	return err
+	return s.listener.Close()
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
 	defer conn.Close()
 
+	const readTimeout = 5 * time.Second
+	conn.SetReadDeadline(time.Now().Add(readTimeout))
+
 	respWriter := response.NewResponseWriter(conn)
-	request, err := request.RequestFromReader(conn)
+	req, err := request.RequestFromReader(conn)
 	if err != nil {
-		log.Println("Request", err)
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			respWriter.WriteStatus(http.StatusRequestTimeout)
+			respWriter.Finish()
+			return
+		}
+		log.Println("request: ", err)
 		respWriter.WriteStatus(http.StatusBadRequest)
+		respWriter.Finish()
 		return
 	}
 
-	err = s.Handler(respWriter, request)
-	if err != nil {
-		log.Println("handler", err)
+	if err := s.Handler(respWriter, req); err != nil {
+		log.Println("handler:", err)
 		respWriter.WriteStatus(http.StatusInternalServerError)
-		return
 	}
 
-	err = respWriter.Finish()
-	if err != nil {
-		log.Println(err)
+	if err := respWriter.Finish(); err != nil {
+		log.Println("error writing response: ", err)
 	}
 }

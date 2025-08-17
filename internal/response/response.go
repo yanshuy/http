@@ -17,40 +17,43 @@ const TransferEncoding = "Transfer-Encoding"
 type Response struct {
 	headers    headers.Headers
 	statusCode int
-	buf        []byte
+	contentLen int
+	chunked    bool
 }
 
 func NewResponse(h headers.Headers) *Response {
 	return &Response{
 		headers:    h,
 		statusCode: 200,
+		chunked:    true,
 	}
 }
 
-type writeStatus int
+type writeState int
 
 const (
-	StateInitial writeStatus = iota
+	StateInitial writeState = iota
 	StateWroteStatus
 	StateWroteHeader
 	StateWroteBody
+	StateError
 )
 
 type Writer struct {
 	*Response
 	writer io.Writer
-	writeStatus
-	chunked    bool
-	contentLen int
+	writeState
+	bytesWritten int
+	lastError    error
 }
 
 func NewResponseWriter(w io.Writer) *Writer {
 	h := DefaultHeaders()
 	resp := NewResponse(h)
 	return &Writer{
-		Response:    resp,
-		writer:      w,
-		writeStatus: StateInitial,
+		Response:   resp,
+		writer:     w,
+		writeState: StateInitial,
 	}
 }
 
@@ -58,9 +61,9 @@ func (w *Writer) Headers() headers.Headers {
 	return w.headers
 }
 
-func (w *Writer) upgradeWriteStatus(ws writeStatus) error {
-	for w.writeStatus < ws {
-		switch w.writeStatus {
+func (w *Writer) upgradeWriteStatus(ws writeState) error {
+	for w.writeState < ws {
+		switch w.writeState {
 		case StateInitial:
 			err := w.WriteStatus(200)
 			if err != nil {
@@ -76,8 +79,17 @@ func (w *Writer) upgradeWriteStatus(ws writeStatus) error {
 	return nil
 }
 
+func (w *Writer) setWriteError(err error) error {
+	w.lastError = err
+	w.writeState = StateError
+	return err
+}
+
 // transfer encoding chucked is used when content-length is not set
-func (w *Writer) Write(p []byte) (int, error) {
+func (w *Writer) Write(p []byte) (n int, err error) {
+	if w.lastError != nil {
+		return 0, w.lastError
+	}
 	if err := w.upgradeWriteStatus(StateWroteHeader); err != nil {
 		return 0, err
 	}
@@ -85,41 +97,45 @@ func (w *Writer) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
-	if !w.chunked {
-		return w.writeContent(p)
-	}
-
-	n, err := fmt.Fprintf(w.writer, "%x\r\n", len(p))
-	if err != nil {
-		return n, err
-	}
-	p = append(p, []byte("\r\n")...)
-	o, err := w.writer.Write(p)
-	if err != nil {
-		return n + o, err
-	}
-
-	return len(p), nil
-}
-
-func (w *Writer) writeContent(p []byte) (int, error) {
-	w.buf = append(w.buf, p...)
-	if len(w.buf) > w.contentLen {
-		return 0, ErrWriteMoreThanContentLength
-	}
-	if len(w.buf) != w.contentLen {
+	if w.chunked {
+		err := w.writeChunk(p)
+		if err != nil {
+			return 0, err
+		}
 		return len(p), nil
 	}
 
-	if n, err := w.writer.Write(w.buf); err != nil {
-		return n, err
+	if w.bytesWritten+len(p) > w.contentLen {
+		w.setWriteError(ErrWriteMoreThanContentLength)
+		return 0, ErrWriteMoreThanContentLength
 	}
-	return len(p), nil
+
+	n, err = w.writer.Write(p)
+	if err != nil {
+		w.setWriteError(err)
+	}
+	w.bytesWritten += n
+	return n, err
+}
+
+func (w *Writer) writeChunk(p []byte) error {
+	chunkHeader := fmt.Sprintf("%x\r\n", len(p))
+
+	chunk := make([]byte, 0, len(chunkHeader)+len(p)+2)
+	chunk = append(chunk, chunkHeader...)
+	chunk = append(chunk, p...)
+	chunk = append(chunk, '\r', '\n')
+
+	_, err := w.writer.Write(chunk)
+	if err != nil {
+		return w.setWriteError(err)
+	}
+	return nil
 }
 
 // writes status directly to the connection
 func (w *Writer) WriteStatus(statusCode int) error {
-	if w.writeStatus > StateWroteStatus {
+	if w.writeState > StateWroteStatus {
 		return ErrStatusAlreadyWritten
 	}
 
@@ -128,28 +144,24 @@ func (w *Writer) WriteStatus(statusCode int) error {
 		return errors.New("bad status code")
 	}
 
-	w.writeStatus = StateWroteStatus
 	_, err := fmt.Fprintf(w.writer, "HTTP/1.1 %d %s\r\n", statusCode, reason)
-	return err
-}
-
-// this implicitly removes transfer-encoding header
-func (w *Writer) SetContentLength(contLenStr string) error {
-	contLen, err := strconv.Atoi(contLenStr)
 	if err != nil {
-		return ErrInvalidContentLength
+		return w.setWriteError(err)
 	}
-	w.buf = make([]byte, 0, contLen)
-	w.contentLen = contLen
-	w.chunked = false
-	w.headers.Set(ContentLength, contLenStr)
-	w.headers.Del(TransferEncoding)
-	return err
+	w.statusCode = statusCode
+	w.writeState = StateWroteStatus
+	return nil
 }
 
 func (w *Writer) writeHeaders() error {
 	if contLenStr, ok := w.headers.Get(ContentLength); ok {
-		w.SetContentLength(contLenStr)
+		contLen, err := strconv.Atoi(contLenStr)
+		if err != nil {
+			return ErrInvalidContentLength
+		}
+		w.contentLen = contLen
+		w.chunked = false
+		w.headers.Del(TransferEncoding)
 	} else {
 		w.chunked = true
 		w.headers.Set(TransferEncoding, "chunked")
@@ -162,27 +174,38 @@ func (w *Writer) writeHeaders() error {
 	}
 	hLines = fmt.Append(hLines, "\r\n")
 
-	w.writeStatus = StateWroteHeader
-	fmt.Println("about to write headers", string(hLines))
+	// fmt.Println("About to write headers!\n", string(hLines))
 	_, err := w.writer.Write(hLines)
-	return err
+	if err != nil {
+		return w.setWriteError(err)
+	}
+	w.writeState = StateWroteHeader
+	return nil
 }
 
-// Finish finalizes the response stream.
+// Finish finalizes the response stream. returns any write error
 // - For chunked, writes the terminating 0-length chunk.
-// - For Content-Length, returns error if body size not satisfied.
+// TODO: Trailers
 func (w *Writer) Finish() error {
-	if err := w.upgradeWriteStatus(StateWroteHeader); err != nil {
-		return err
+	if w.lastError != nil {
+		return w.lastError
 	}
+	if w.writeState < StateWroteHeader {
+		w.headers.Set(ContentLength, "0")
+		if err := w.upgradeWriteStatus(StateWroteHeader); err != nil {
+			return err
+		}
+	}
+
 	if w.chunked {
 		_, err := io.WriteString(w.writer, "0\r\n\r\n")
 		return err
 	}
 
-	if w.buf != nil && len(w.buf) != w.contentLen {
+	if w.bytesWritten != w.contentLen {
 		return io.ErrShortWrite
 	}
+
 	return nil
 }
 
