@@ -120,13 +120,13 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 
 func (w *Writer) writeChunk(p []byte) error {
 	chunkHeader := fmt.Sprintf("%x\r\n", len(p))
+	_, err := w.writer.Write([]byte(chunkHeader))
+	if err != nil {
+		return w.setWriteError(err)
+	}
 
-	chunk := make([]byte, 0, len(chunkHeader)+len(p)+2)
-	chunk = append(chunk, chunkHeader...)
-	chunk = append(chunk, p...)
-	chunk = append(chunk, '\r', '\n')
-
-	_, err := w.writer.Write(chunk)
+	p = append(p, '\r', '\n')
+	_, err = w.writer.Write(p)
 	if err != nil {
 		return w.setWriteError(err)
 	}
